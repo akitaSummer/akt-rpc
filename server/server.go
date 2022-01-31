@@ -3,27 +3,63 @@ package server
 import (
 	"akt-rpc/codec"
 	"akt-rpc/option"
+	"akt-rpc/service"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
 type request struct {
 	h            *codec.Header
 	argv, replyv reflect.Value
+	mtype        *service.MethodType
+	svc          *service.Service
 }
 
-type Server struct{}
+type Server struct {
+	serviceMap sync.Map
+}
 
 func NewServer() *Server {
 	return &Server{}
 }
 
 var DefaultServer = NewServer()
+
+func (server *Server) Register(rcvr interface{}) error {
+	s := service.NewService(rcvr)
+	if _, dup := server.serviceMap.LoadOrStore(s.Name, s); dup {
+		return errors.New("rpc: service already defined: " + s.Name)
+	}
+	return nil
+}
+
+func Register(rcvr interface{}) error { return DefaultServer.Register(rcvr) }
+
+func (server *Server) findService(serviceMethod string) (svc *service.Service, mtype *service.MethodType, err error) {
+	dot := strings.LastIndex(serviceMethod, ".")
+	if dot < 0 {
+		err = errors.New("rpc server: service/method request ill-formed: " + serviceMethod)
+		return
+	}
+	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
+	svci, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err = errors.New("rpc server: can't find service " + serviceName)
+		return
+	}
+	svc = svci.(*service.Service)
+	mtype = svc.Method[methodName]
+	if mtype == nil {
+		err = errors.New("rpc server: can't find method " + methodName)
+	}
+	return
+}
 
 // 监听请求
 func (server *Server) Accept(listener net.Listener) {
@@ -96,8 +132,20 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 		return nil, err
 	}
 	req := &request{h: h}
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err = cc.ReadBody(req.argv.Interface()); err != nil {
+
+	req.svc, req.mtype, err = server.findService(h.ServiceMethod)
+	if err != nil {
+		return req, err
+	}
+	req.argv = req.mtype.NewArgv()
+	req.replyv = req.mtype.NewReplyv()
+
+	argvi := req.argv.Interface()
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface()
+	}
+
+	if err = cc.ReadBody(argvi); err != nil {
 		log.Println("rpc server: read argv err:", err)
 	}
 	return req, nil
@@ -116,8 +164,12 @@ func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 
 func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
 	defer wg.Done()
-	log.Println(req.h, req.argv.Elem())
-	req.replyv = reflect.ValueOf(fmt.Sprintf("aktrpc resp %d", req.h.Seq))
+	err := req.svc.Call(req.mtype, req.argv, req.replyv)
+	if err != nil {
+		req.h.Error = err.Error()
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+		return
+	}
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
 }
 
