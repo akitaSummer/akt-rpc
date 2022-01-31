@@ -2,6 +2,7 @@ package server
 
 import (
 	"akt-rpc/codec"
+	"akt-rpc/option"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,24 +12,9 @@ import (
 	"sync"
 )
 
-const MagicNumber = 0x3bef5c
-
-// 存储编解码信息，使用json传递
-// | Option{MagicNumber: xxx, CodecType: xxx} | Header{ServiceMethod ...} | Body interface{} |
-// | <------      固定 JSON 编码      ------>  | <-------   编码方式由 CodeType 决定   ------->|
-type Option struct {
-	MagicNumber int        // 表示为rpc请求
-	CodecType   codec.Type // 解码形式
-}
-
 type request struct {
 	h            *codec.Header
 	argv, replyv reflect.Value
-}
-
-var DefaultOption = &Option{
-	MagicNumber: MagicNumber,
-	CodecType:   codec.GobType,
 }
 
 type Server struct{}
@@ -60,12 +46,12 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	defer func() {
 		_ = conn.Close()
 	}()
-	var opt Option
+	var opt option.Option
 	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
 		log.Println("rpc server: options error: ", err)
 		return
 	}
-	if opt.MagicNumber != MagicNumber {
+	if opt.MagicNumber != option.MagicNumber {
 		log.Printf("rpc server: invalid magic number %x", opt.MagicNumber)
 		return
 	}
