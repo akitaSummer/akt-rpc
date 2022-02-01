@@ -2,6 +2,7 @@ package option
 
 import (
 	"akt-rpc/codec"
+	"time"
 )
 
 const MagicNumber = 0x3bef5c
@@ -10,11 +11,14 @@ const MagicNumber = 0x3bef5c
 // | Option{MagicNumber: xxx, CodecType: xxx} | Header{ServiceMethod ...} | Body interface{} |
 // | <------      固定 JSON 编码      ------>  | <-------   编码方式由 CodeType 决定   ------->|
 type Option struct {
-	MagicNumber int        // 表示为rpc请求
-	CodecType   codec.Type // 解码形式
+	MagicNumber    int        // 表示为rpc请求
+	CodecType      codec.Type // 解码形式
+	ConnectTimeout time.Duration
+	HandleTimeout  time.Duration
 }
 
 var DefaultOption = &Option{
-	MagicNumber: MagicNumber,
-	CodecType:   codec.GobType,
+	MagicNumber:    MagicNumber,
+	CodecType:      codec.GobType,
+	ConnectTimeout: time.Second * 10,
 }
