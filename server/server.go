@@ -10,10 +10,17 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	Connected        = "200 Connected to AKT RPC"
+	DefaultRPCPath   = "/_aktrpc_"
+	DefaultDebugPath = "/debug/aktrpc"
 )
 
 type request struct {
@@ -24,7 +31,32 @@ type request struct {
 }
 
 type Server struct {
-	serviceMap sync.Map
+	ServiceMap sync.Map
+}
+
+func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.Method != "CONNECT" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, "405 must CONNECT\n")
+		return
+	}
+	// 调用Hijack后，HTTP的server不会对连接做多余的处理让用户自己管理和关闭连接
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Print("rpc hijacking ", req.RemoteAddr, ": ", err.Error())
+		return
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+Connected+"\n\n")
+	server.ServeConn(conn)
+}
+
+func (server *Server) HandleHTTP() {
+	http.Handle(DefaultRPCPath, server)
+}
+
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
 }
 
 func NewServer() *Server {
@@ -35,7 +67,7 @@ var DefaultServer = NewServer()
 
 func (server *Server) Register(rcvr interface{}) error {
 	s := service.NewService(rcvr)
-	if _, dup := server.serviceMap.LoadOrStore(s.Name, s); dup {
+	if _, dup := server.ServiceMap.LoadOrStore(s.Name, s); dup {
 		return errors.New("rpc: service already defined: " + s.Name)
 	}
 	return nil
@@ -50,7 +82,7 @@ func (server *Server) findService(serviceMethod string) (svc *service.Service, m
 		return
 	}
 	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
-	svci, ok := server.serviceMap.Load(serviceName)
+	svci, ok := server.ServiceMap.Load(serviceName)
 	if !ok {
 		err = errors.New("rpc server: can't find service " + serviceName)
 		return
